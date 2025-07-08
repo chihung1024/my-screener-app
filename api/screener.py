@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-# 最終版：增加了更強的錯誤處理和日誌記錄，以適應 Vercel 環境
-# 請先安裝必要的函式庫: pip install Flask yfinance pandas numpy
+# 最終版：增加了對請求數量的限制，以防止在免費平台上超時
 
 from flask import Flask, request, jsonify
 import yfinance as yf
@@ -11,7 +10,6 @@ import traceback
 import sys
 
 # 初始化 Flask 應用
-# Vercel 會自動找到這個 'app' 物件
 app = Flask(__name__)
 
 # --- 核心計算邏輯 (增加健壯性) ---
@@ -20,7 +18,6 @@ def get_stock_data(ticker_symbol):
     """為單一股票獲取計算所需的所有原始數據。"""
     try:
         stock = yf.Ticker(ticker_symbol)
-        # 進行一個快速的歷史數據檢查，以驗證 Ticker 是否有效
         if stock.history(period="5d").empty:
             print(f"警告: {ticker_symbol} 找不到歷史數據，可能為無效代碼。", file=sys.stderr)
             return None
@@ -30,7 +27,6 @@ def get_stock_data(ticker_symbol):
         balance_sheet = stock.balance_sheet
         cashflow = stock.cashflow
         
-        # 檢查關鍵財報是否為空
         if financials.empty or balance_sheet.empty or cashflow.empty:
             print(f"警告: {ticker_symbol} 的財報數據不完整，將被跳過。", file=sys.stderr)
             return None
@@ -119,14 +115,9 @@ def rank_stocks(df, weights):
     return final_df
 
 # --- API 端點 (Endpoint) ---
-# Vercel 的路由規則會將 /api/screener 的請求導向到這個檔案
-# Flask 的 @app.route('/') 會處理這個檔案接收到的所有請求
 @app.route('/', methods=['POST'])
 def handler():
     try:
-        print("API 請求已收到。", file=sys.stderr)
-        sys.stderr.flush()
-
         request_data = request.get_json()
         if not request_data:
             return jsonify({"error": "無效的請求: 未提供 JSON 數據"}), 400
@@ -138,6 +129,12 @@ def handler():
             return jsonify({"error": "無效的請求: 'tickers' 必須是一個非空的列表"}), 400
         if not isinstance(factor_weights, dict) or not factor_weights:
             return jsonify({"error": "無效的請求: 'weights' 必須是一個非空的字典"}), 400
+
+        # --- 關鍵修正：加入股票數量限制 ---
+        MAX_TICKERS = 45 # 設定一個安全的上限，以確保在 Vercel 的 60 秒超時限制內完成
+        if len(tickers_to_process) > MAX_TICKERS:
+            error_message = f"請求的股票數量 ({len(tickers_to_process)}) 過多。為避免在免費平台上超時，請將單次篩選的股票數量限制在 {MAX_TICKERS} 支以內。"
+            return jsonify({"error": error_message}), 400
 
         all_metrics = []
         print(f"準備處理 {len(tickers_to_process)} 支股票...", file=sys.stderr)
@@ -155,7 +152,7 @@ def handler():
             else:
                 print(f"警告: 無法獲取或處理 {ticker} 的數據，已跳過。", file=sys.stderr)
                 sys.stderr.flush()
-            time.sleep(1) # 保持延遲以避免頻率限制
+            time.sleep(1) 
 
         if not all_metrics:
             return jsonify({"error": "未能從 yfinance 獲取任何有效的股票數據。請檢查股票代碼或稍後再試。"}), 500
@@ -174,23 +171,7 @@ def handler():
         return jsonify(result_json)
 
     except Exception as e:
-        # 這是最重要的保護網，確保任何未預期的錯誤都能被捕捉
-        # 並以 JSON 格式返回，而不是讓伺服器崩潰
         print(f"伺服器內部發生嚴重錯誤: {e}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         sys.stderr.flush()
         return jsonify({"error": "伺服器在處理請求時發生未知內部錯誤。", "message": str(e)}), 500
-```
-
-### 下一步：更新與重新部署
-
-請依照以下步驟，用這份最終版的程式碼來修復您的線上應用：
-
-1.  **回到 GitHub**：進入您的 `my-screener-app` 儲存庫頁面。
-2.  **編輯檔案**：導航到 `api` 資料夾，點擊 `screener.py` 檔案，然後點擊鉛筆圖示 ✏️ 進行編輯。
-3.  **替換程式碼**：將編輯區內**所有**的舊程式碼刪除，然後將上方這份最終版的 Python 程式碼**完整地**複製並貼上。
-4.  **儲存變更**：捲動到頁面底部，點擊綠色的 **Commit changes** 按鈕。
-
-完成儲存後，Vercel 會自動偵測到您的 GitHub 儲存庫發生了變更，並會**自動開始一次新的部署**。您可以回到您的 Vercel 儀表板，查看最新的部署進度。
-
-這次，由於我們加入了更強的錯誤處理機制，即使 `yfinance` 偶爾失敗，您的應用程式也不會再崩潰並返回 HTML 錯誤頁
