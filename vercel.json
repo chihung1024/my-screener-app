@@ -1,0 +1,20 @@
+{
+  "builds": [
+    {
+      "src": "/api/screener.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/screener.py"
+    }
+  ],
+  "functions": {
+    "api/screener.py": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  }
+}
